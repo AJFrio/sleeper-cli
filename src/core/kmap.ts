@@ -89,32 +89,3 @@ export function toRosterMap(playerIds: readonly string[], rosterId: number): Ros
 export function rosterMapKeys(map: RosterMap): string[] {
   return Object.keys(map);
 }
-
-/**
- * Build a draft-pick payload for `propose_trade`.
- *
- * Sleeper takes traded picks as a JSON string rather than a kmap, keyed by pick
- * position so the receiving side knows which round each pick was.
- */
-export function buildDraftPickPayload(
-  picks: readonly { round: number; rosterId: number }[],
-): string {
-  return JSON.stringify(picks.map((p) => [p.rosterId, p.round]));
-}
-
-/** Parse Sleeper's `draft_picks` response into a readable form. */
-export function parseDraftPicks(raw: unknown): { round: number; rosterId: number }[] {
-  if (typeof raw !== 'string' || raw.length === 0) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry) => {
-      if (!Array.isArray(entry) || entry.length < 2) return [];
-      const [rosterId, round] = entry;
-      if (typeof rosterId !== 'number' || typeof round !== 'number') return [];
-      return [{ rosterId, round }];
-    });
-  } catch {
-    return [];
-  }
-}

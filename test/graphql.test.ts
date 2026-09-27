@@ -73,20 +73,31 @@ describe('Authorization header', () => {
     expect(headers.Authorization).toBeUndefined();
   });
 
-  it('sends no CSRF or anti-forgery header', async () => {
+  it('identifies itself as the web client, without a CSRF token', async () => {
     const { impl, calls } = fakeFetch({ data: { me: { user_id: '1' } } });
     const c = client(impl);
     c.setToken('t');
 
-    await c.query('{ me { user_id } }');
+    await c.query('query me { me { user_id } }');
 
     const headers = calls[0]?.init.headers as Record<string, string>;
-    // The current web client sends nothing of the sort; older guides describe one.
-    expect(
-      Object.keys(headers)
-        .map((k) => k.toLowerCase())
-        .sort(),
-    ).toEqual(['accept', 'authorization', 'content-type']);
+    const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+
+    // No anti-forgery header exists; Sleeper's current client sends none.
+    expect(Object.keys(lower).some((k) => k.includes('hash') || k.includes('csrf'))).toBe(false);
+
+    // These three are sent by Sleeper's own client and reported as required by
+    // independent third-party implementations.
+    expect(lower.origin).toBe('https://sleeper.com');
+    expect(lower.referer).toBe('https://sleeper.com/');
+    expect(lower['x-sleeper-graphql-op']).toBe('me');
+  });
+
+  it('sends the operation name even for an unauthenticated query', async () => {
+    const { impl, calls } = fakeFetch({ data: { me: null } });
+    await client(impl).query('{ me { user_id } }');
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers['X-Sleeper-GraphQL-Op']).toBe('me');
   });
 });
 

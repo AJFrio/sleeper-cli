@@ -65,7 +65,7 @@ SLEEPER_TOKEN=... sleeper auth status
 | `auth` | `login`, `status`, `whoami`, `logout`, `token` |
 | `leagues` | `list`, `use`, `current`, `settings`, `standings`, `rosters` |
 | `roster` | `show` — starters, reserve, taxi, bench |
-| `lineup` | `show`, `set`, `recommend`, `bench-all` |
+| `lineup` | `show`, `set`, `ir`, `taxi`, `recommend`, `bench-all` |
 | `add` / `drop` | Free-agent moves, combined into one transaction |
 | `trade` | `propose`, `accept`, `reject`, `list`, `show` |
 | `waiver` | `add`, `edit`, `cancel`, `list`, `priority` |
@@ -157,6 +157,19 @@ each player is that player's **current owner**: the counterparty's roster for a 
 you receive, and yours for a player you send. This is the single easiest thing to get
 backwards, and getting it backwards silently reverses the trade, so it is stated once in
 [`src/commands/trade.ts`](src/commands/trade.ts) and pinned by tests.
+
+Draft picks and FAAB travel in the same mutation as *lists of delimited strings*, not as
+JSON objects:
+
+```
+draft_picks[i]   = originalOwnerRoster,season,round,fromRoster,toRoster
+waiver_budget[i] = fromRoster-toRoster-amount
+```
+
+This is the least certain part of the whole tool. It is consistent with the schema type
+and with the public REST `traded_picks` payload, but it has not been observed on the
+wire. **Check a pick trade with `--explain` before you rely on it.** The reasoning is
+written up in [`docs/INTERNAL-API.md`](docs/INTERNAL-API.md).
 
 ## Caching
 

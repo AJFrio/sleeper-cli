@@ -82,6 +82,117 @@ export async function setLineup(
   return result;
 }
 
+export interface ReserveInput {
+  leagueId: string;
+  rosterId: number;
+  /** Player ids to occupy the reserve/IR slots, replacing the existing list. */
+  reserve: string[];
+  /**
+   * Whether to force a reserve change that would leave an illegal number of players.
+   *
+   * Sleeper refuses to bench a starter into IR implicitly, so clearing reserve can
+   * require this.
+   */
+  force?: boolean;
+}
+
+export interface TaxiInput {
+  leagueId: string;
+  rosterId: number;
+  /** Player ids to occupy the taxi slots, replacing the existing squad. */
+  taxi: string[];
+  /** Bypass the dynasty-league taxi gate. */
+  force?: boolean;
+}
+
+/** Build the reserve operation, for `--explain` and dry runs. */
+export function buildSetReserveOperation(input: ReserveInput): {
+  document: string;
+  variables: Record<string, unknown>;
+} {
+  return {
+    document: UPDATE_RESERVE,
+    variables: { leagueId: input.leagueId, rosterId: input.rosterId, reserve: input.reserve },
+  };
+}
+
+const UPDATE_RESERVE = `
+  mutation roster_update_reserve($leagueId: String!, $rosterId: Int!, $reserve: [String]) {
+    roster_update_reserve(league_id: $leagueId, roster_id: $rosterId, reserve: $reserve) {
+      roster_id league_id owner_id starters players reserve taxi
+    }
+  }
+`;
+
+/**
+ * Replace the reserve and IR slots.
+ *
+ * `reserve` is a full replacement, not a delta: Sleeper stores the slot list as a
+ * whole, so a partial list moves every omitted player out of IR and onto the bench.
+ */
+export async function setReserve(
+  graphql: GraphQLClient,
+  input: ReserveInput,
+): Promise<SetLineupResult> {
+  const operation = buildSetReserveOperation(input);
+  const data = await graphql.query<{ roster_update_reserve: SetLineupResult }>(
+    operation.document,
+    operation.variables,
+  );
+  const result = data.roster_update_reserve;
+  if (!result) {
+    throw new UsageError('Sleeper accepted the request but returned no roster');
+  }
+  return result;
+}
+
+const UPDATE_TAXI = `
+  mutation roster_update_taxi(
+    $leagueId: String!  $rosterId: Int!  $taxi: [String]  $force: Boolean
+  ) {
+    roster_update_taxi(
+      league_id: $leagueId, roster_id: $rosterId, taxi: $taxi, force: $force
+    ) {
+      roster_id league_id owner_id starters players reserve taxi
+    }
+  }
+`;
+
+/**
+ * Replace the taxi squad.
+ *
+ * Dynasty leagues gate taxi slots, so a change here can be rejected for reasons the
+ * caller cannot see. `force` exists for the same reason it does on reserve.
+ */
+/** Build the taxi operation, for `--explain` and dry runs. */
+export function buildSetTaxiOperation(input: TaxiInput): {
+  document: string;
+  variables: Record<string, unknown>;
+} {
+  return {
+    document: UPDATE_TAXI,
+    variables: {
+      leagueId: input.leagueId,
+      rosterId: input.rosterId,
+      taxi: input.taxi,
+      force: input.force ?? false,
+    },
+  };
+}
+
+export async function setTaxi(graphql: GraphQLClient, input: TaxiInput): Promise<SetLineupResult> {
+  const operation = buildSetTaxiOperation(input);
+  const data = await graphql.query<{ roster_update_taxi: SetLineupResult }>(
+    operation.document,
+    operation.variables,
+  );
+  const result = data.roster_update_taxi;
+  if (!result) {
+    throw new UsageError('Sleeper accepted the request but returned no taxi squad');
+  }
+  return result;
+}
+
 export interface CommissionerLineupInput {
   leagueId: string;
   rosterId: number;

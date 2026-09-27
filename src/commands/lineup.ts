@@ -11,8 +11,12 @@ import { UsageError } from '../core/errors.js';
 import { type Player, playerName } from '../core/types.js';
 import {
   buildSetLineupOperation,
+  buildSetReserveOperation,
+  buildSetTaxiOperation,
   expectedStarterCount,
   setLineup,
+  setReserve,
+  setTaxi,
   validateLineup,
 } from '../domain/lineup.js';
 import { getMatchups, type MatchupWithTeams, pairMatchups } from '../domain/matchups.js';
@@ -191,6 +195,113 @@ function suggestLineup(
   return out;
 }
 
+type SlotKind = 'reserve' | 'taxi';
+
+/**
+ * Run a full-replacement slot mutation.
+ *
+ * Reserve and taxi behave identically apart from the operation, so one handler covers
+ * both rather than duplicating the gate, the dry run, and the name resolution.
+ */
+async function runSlotUpdate(
+  deps: CommandDeps,
+  kind: SlotKind,
+  players: string[],
+  options: LineupOptions & { force?: boolean },
+): Promise<void> {
+  const context = buildContext(options, deps.client().config.output);
+  const emit = deps.emit();
+  const client = deps.client();
+  client.requireSession();
+
+  const leagueId = await client.resolveLeagueId(options.league);
+  const rosterId = await client.resolveRosterId(
+    leagueId,
+    options.rosterId ? Number(options.rosterId) : undefined,
+  );
+
+  // An empty list is meaningful here: it clears the slots. The `ir` command declares
+  // a required variadic argument, so Commander supplies [] rather than rejecting.
+  const ids = players.length > 0 ? await resolvePlayerTokens(client, players) : [];
+  const rosters = await client.rosters(leagueId);
+  const roster = rosters.find((entry) => entry.roster_id === rosterId);
+  if (!roster) throw new UsageError(`Roster ${rosterId} not found in league ${leagueId}`);
+
+  const current = kind === 'reserve' ? (roster.reserve ?? []) : (roster.taxi ?? []);
+  const notOwned = ids.filter((id) => !roster.players.includes(id));
+  if (notOwned.length > 0) {
+    throw new UsageError(
+      `Not on this roster: ${notOwned.join(', ')}`,
+      'Check the ids with `sleeper roster show`.',
+    );
+  }
+
+  // Branch rather than build a union: the two operations take differently-named
+  // arguments, so a single value would need a cast and the call sites would lose
+  // their type safety.
+  const operation =
+    kind === 'reserve'
+      ? buildSetReserveOperation({ leagueId, rosterId, reserve: ids })
+      : buildSetTaxiOperation({ leagueId, rosterId, taxi: ids, force: options.force ?? false });
+
+  if (context.explain) {
+    emit.emitJsonPayload(operation);
+    return;
+  }
+
+  const names = await buildNameMap(client, [...ids, ...current]);
+  const label = (list: readonly string[]): string =>
+    list.length === 0 ? '—' : list.map((id) => names.get(id) ?? id).join(', ');
+  const slot = kind === 'reserve' ? 'IR/reserve' : 'taxi';
+
+  if (context.dryRun) {
+    emit.emit({
+      command: deps.commandPath(),
+      data: { dry_run: true, league_id: leagueId, roster_id: rosterId, [kind]: ids, operation },
+      table: () =>
+        [
+          'Dry run — nothing was sent.',
+          '',
+          `  ${slot} now : ${label(ids)}`,
+          `  was         : ${label(current)}`,
+        ].join('\n'),
+    });
+    return;
+  }
+
+  await confirmAction(
+    ids.length === 0
+      ? `clear your entire ${slot} list (${label(current)})`
+      : `set ${slot} to ${label(ids)} (was ${label(current)})`,
+    context,
+  );
+
+  const result =
+    kind === 'reserve'
+      ? await setReserve(client.graphql, { leagueId, rosterId, reserve: ids })
+      : await setTaxi(client.graphql, {
+          leagueId,
+          rosterId,
+          taxi: ids,
+          force: options.force ?? false,
+        });
+
+  emit.emit({
+    command: deps.commandPath(),
+    data: {
+      league_id: leagueId,
+      roster_id: rosterId,
+      [kind]: kind === 'reserve' ? result.reserve : result.taxi,
+    },
+    table: () =>
+      [
+        `${slot} updated.`,
+        `  was     : ${label(current)}`,
+        `  now     : ${label(kind === 'reserve' ? (result.reserve ?? []) : (result.taxi ?? []))}`,
+      ].join('\n'),
+  });
+}
+
 export function registerLineupCommands(program: Command, deps: CommandDeps): void {
   const lineup = program.command('lineup').description('View, set, and optimise a weekly lineup');
 
@@ -354,6 +465,53 @@ export function registerLineupCommands(program: Command, deps: CommandDeps): voi
             `  removed : ${label(outgoing)}`,
           ].join('\n'),
       });
+    });
+
+  // --------------------------------------------------------- ir / reserve
+  lineup
+    .command('ir <players...>')
+    .description('Set your IR and reserve slots, replacing the existing list')
+    .option('-l, --league <id>', 'league to act in')
+    .option('--roster-id <n>', 'roster to act on (defaults to yours)')
+    .addHelpText(
+      'after',
+      [
+        '',
+        'This replaces the whole reserve list, not just the players named. Anyone you',
+        'leave out moves to the bench, so pass the complete intended IR list.',
+        '',
+        'Pass no players to clear IR entirely.',
+        '',
+        'Examples:',
+        '  sleeper ir 486 --dry-run',
+        '  sleeper ir 486 1309 --yes',
+      ].join('\n'),
+    )
+    .action(async (players: string[], options: LineupOptions) => {
+      await runSlotUpdate(deps, 'reserve', players, options);
+    });
+
+  // ------------------------------------------------------------------ taxi
+  lineup
+    .command('taxi <players...>')
+    .description('Set your taxi squad, replacing the existing list')
+    .option('-l, --league <id>', 'league to act in')
+    .option('--roster-id <n>', 'roster to act on (defaults to yours)')
+    .option('--force', 'bypass the dynasty taxi gate')
+    .addHelpText(
+      'after',
+      [
+        '',
+        'Dynasty leagues gate taxi slots, so this can be refused for reasons the error',
+        'message does not explain. --force exists for that case.',
+        '',
+        'Examples:',
+        '  sleeper taxi 486 1309 --dry-run',
+        '  sleeper taxi --yes          # clear the taxi squad',
+      ].join('\n'),
+    )
+    .action(async (players: string[], options: LineupOptions & { force?: boolean }) => {
+      await runSlotUpdate(deps, 'taxi', players, { ...options, force: options.force });
     });
 
   // ------------------------------------------------------------ recommend

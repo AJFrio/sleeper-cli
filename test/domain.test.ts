@@ -21,11 +21,7 @@ import {
 } from '../src/domain/lineup.js';
 import { buildStandings, pairMatchups } from '../src/domain/matchups.js';
 import { parseStatField, sumStat } from '../src/domain/stats.js';
-import {
-  buildProposeTradeOperation,
-  encodeDraftPicks,
-  encodeWaiverBudget,
-} from '../src/domain/trades.js';
+import { buildProposeTradeOperation } from '../src/domain/trades.js';
 import { involvingRoster, pendingForRoster, viewForRoster } from '../src/domain/transactions.js';
 import {
   buildSubmitWaiverOperation,
@@ -161,7 +157,21 @@ describe('buildProposeTradeOperation', () => {
     ).toThrow(/receives nothing/);
   });
 
-  it('accepts a pick-only trade', () => {
+  it('accepts a pick-only trade when the season is resolvable', () => {
+    expect(() =>
+      buildProposeTradeOperation({
+        leagueId: 'L1',
+        adds: {},
+        drops: {},
+        picks: [{ rosterId: 2, round: 1 }],
+        defaultSeason: 2026,
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a pick-only trade whose season cannot be resolved', () => {
+    // The wire format has no slot for an absent season, so a malformed record that
+    // Sleeper would reject opaquely is worse than a local error.
     expect(() =>
       buildProposeTradeOperation({
         leagueId: 'L1',
@@ -169,21 +179,7 @@ describe('buildProposeTradeOperation', () => {
         drops: {},
         picks: [{ rosterId: 2, round: 1 }],
       }),
-    ).not.toThrow();
-  });
-
-  it('encodes picks as pairs, and as objects when a season is given', () => {
-    expect(encodeDraftPicks([{ rosterId: 2, round: 1 }])).toBe('[[2,1]]');
-    expect(encodeDraftPicks([{ rosterId: 2, round: 1, season: 2027 }])).toBe(
-      '[{"roster_id":2,"round":1,"season":2027}]',
-    );
-  });
-
-  it('encodes FAAB as a sender/receiver pair', () => {
-    expect(encodeWaiverBudget({ fromRosterId: 1, toRosterId: 2, amount: 5 })).toBe(
-      '[{"sender":1,"receiver":2,"amount":5}]',
-    );
-    expect(encodeWaiverBudget(undefined)).toBeUndefined();
+    ).toThrow(/season/);
   });
 
   it('omits draft_picks and waiver_budget when absent rather than sending empties', () => {

@@ -7,14 +7,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { rosterMapKeys, toGraphQLKmapArgs, toKmap, toRosterMap } from '../src/core/kmap.js';
 import {
-  buildDraftPickPayload,
-  parseDraftPicks,
-  rosterMapKeys,
-  toGraphQLKmapArgs,
-  toKmap,
-  toRosterMap,
-} from '../src/core/kmap.js';
+  buildProposeTradeOperation,
+  decodeDraftPicks,
+  encodeDraftPicks,
+  encodeWaiverBudget,
+} from '../src/domain/trades.js';
 
 describe('toKmap', () => {
   it('splits keys and values positionally', () => {
@@ -96,26 +95,86 @@ describe('rosterMapKeys', () => {
   });
 });
 
-describe('draft pick payloads', () => {
-  it('encodes pairs', () => {
-    expect(buildDraftPickPayload([{ rosterId: 2, round: 1 }])).toBe('[[2,1]]');
-  });
-
-  it('parses pairs back', () => {
-    expect(parseDraftPicks('[[2,1],[3,4]]')).toEqual([
-      { rosterId: 2, round: 1 },
-      { rosterId: 3, round: 4 },
+describe('draft pick encoding', () => {
+  it('emits one comma-separated record per pick, not a JSON blob', () => {
+    // `draft_picks` is [String], not String, per full wrapper introspection of the live
+    // schema. A single JSON string here is silently wrong, which is how this started.
+    expect(encodeDraftPicks([{ rosterId: 7, round: 1, season: 2026 }], undefined)).toEqual([
+      '7,2026,1,7,7',
     ]);
   });
 
-  it('returns an empty list for malformed input rather than throwing', () => {
-    expect(parseDraftPicks('not json')).toEqual([]);
-    expect(parseDraftPicks('{"a":1}')).toEqual([]);
-    expect(parseDraftPicks('')).toEqual([]);
-    expect(parseDraftPicks(null)).toEqual([]);
+  it('carries the original owner separately from the current holder', () => {
+    expect(
+      encodeDraftPicks(
+        [{ rosterId: 7, round: 1, season: 2026, originalOwnerRosterId: 3, toRosterId: 8 }],
+        undefined,
+      ),
+    ).toEqual(['3,2026,1,7,8']);
   });
 
-  it('skips entries of the wrong shape', () => {
-    expect(parseDraftPicks('[["a",1],[2]]')).toEqual([]);
+  it('emits one record per pick', () => {
+    expect(
+      encodeDraftPicks(
+        [
+          { rosterId: 1, round: 1, season: 2026 },
+          { rosterId: 2, round: 2, season: 2026 },
+        ],
+        undefined,
+      ),
+    ).toEqual(['1,2026,1,1,1', '2,2026,2,2,2']);
+  });
+
+  it('inherits the league season when a pick omits one', () => {
+    expect(encodeDraftPicks([{ rosterId: 4, round: 3 }], 2027)).toEqual(['4,2027,3,4,4']);
+  });
+
+  it('refuses a pick with no resolvable season', () => {
+    expect(() => encodeDraftPicks([{ rosterId: 4, round: 3 }], undefined)).toThrow(/season/);
+  });
+
+  it('round-trips through decode', () => {
+    const encoded = encodeDraftPicks(
+      [{ rosterId: 7, round: 1, season: 2026, originalOwnerRosterId: 3, toRosterId: 8 }],
+      undefined,
+    );
+    expect(decodeDraftPicks(encoded)).toEqual([
+      { originalOwnerRosterId: 3, season: 2026, round: 1, fromRosterId: 7, toRosterId: 8 },
+    ]);
+  });
+
+  it('skips malformed records when decoding', () => {
+    expect(decodeDraftPicks(['1,2,3', 'a,b,c,d,e', '1,2,3,4,5'])).toEqual([
+      { originalOwnerRosterId: 1, season: 2, round: 3, fromRosterId: 4, toRosterId: 5 },
+    ]);
+  });
+});
+
+describe('waiver budget encoding', () => {
+  it('emits a dash-separated triple', () => {
+    expect(encodeWaiverBudget({ fromRosterId: 1, toRosterId: 2, amount: 5 })).toEqual(['1-2-5']);
+  });
+
+  it('is absent when there is no FAAB', () => {
+    expect(encodeWaiverBudget(undefined)).toBeUndefined();
+  });
+});
+
+describe('propose_trade operation', () => {
+  it('types draftPicks and waiverBudget as lists in the document', () => {
+    const { document, variables } = buildProposeTradeOperation({
+      leagueId: 'L1',
+      adds: { 1309: 2 },
+      drops: { 486: 1 },
+      picks: [{ rosterId: 2, round: 1, season: 2026 }],
+      faab: { fromRosterId: 1, toRosterId: 2, amount: 3 },
+    });
+
+    expect(document).toContain('$draftPicks: [String]');
+    expect(document).toContain('$waiverBudget: [String]');
+    expect(Array.isArray(variables.draftPicks)).toBe(true);
+    expect(Array.isArray(variables.waiverBudget)).toBe(true);
+    expect(variables.draftPicks).toEqual(['2,2026,1,2,2']);
+    expect(variables.waiverBudget).toEqual(['1-2-3']);
   });
 });

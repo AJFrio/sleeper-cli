@@ -254,6 +254,7 @@ export class GraphQLClient {
     timeoutMs: number,
     externalSignal: AbortSignal | undefined,
   ): Promise<GraphQLResponse<T>> {
+    const operationName = extractOperationName(document);
     const controller = new AbortController();
     const onExternalAbort = (): void => controller.abort(externalSignal?.reason);
     if (externalSignal) {
@@ -269,6 +270,13 @@ export class GraphQLClient {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          // Sleeper's own client identifies itself as the web app, and independent
+          // third-party implementations report these three headers as required. They
+          // are cheap and harmless, and their absence is the most likely cause of a
+          // request that is rejected for reasons the error message does not explain.
+          Origin: 'https://sleeper.com',
+          Referer: 'https://sleeper.com/',
+          'X-Sleeper-GraphQL-Op': operationName,
           ...(token ? { Authorization: token } : {}),
         },
         body: JSON.stringify({ query: document, variables }),

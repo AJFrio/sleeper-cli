@@ -35,6 +35,11 @@ This is unusual and worth knowing — the common camelCase spellings fail:
 
 Totals as of 2026-09-26: **244 queries**, **355 mutations**, **154 types**.
 
+Note that introspection is currently enabled. An independent schema dump published in
+October 2025 states that introspection is disabled and that mutations must be recovered by
+observing network traffic; that was true of the older dump but is no longer true of the
+live endpoint, so a fresh introspection is worth more than a cached schema file.
+
 ## 3. Authentication
 
 `login` is a **query**, not a mutation, and takes no auth:
@@ -137,8 +142,35 @@ because the *value* is the **destination roster** for adds and the **source rost
 drops. Both are relative to the authenticated user, which is why the same mutation can
 express both halves of a trade with no extra parameters.
 
-Introspection reports these arguments as the scalars `String` and `Int` rather than as
-`[String]` and `[Int]`, but the server accepts lists. Pass arrays.
+### Introspection flattens wrapper types — read them carefully
+
+A naive introspection query that prints only the innermost type name reports `k_adds` as
+`String` and `k_adds` as `String`. Both are wrong: the true types are `[String]` and
+`[Int]`. The `NON_NULL` and `LIST` wrappers are only visible if you follow the chain:
+
+```graphql
+{ __schema { mutation_type { fields {
+  name
+  args { name type { kind name of_type { kind name of_type { kind name } } } }
+} } } }
+```
+
+Rendering that chain with `NON_NULL -> !` and `LIST -> [...]` gives the real picture:
+
+| Operation | Argument | True type |
+| --- | --- | --- |
+| `league_create_transaction` | `k_adds` / `v_adds` | `[String]` / `[Int]` |
+| `propose_trade` | `k_adds` / `v_adds` | `[String]` / `[Int]` |
+| `propose_trade` | **`draft_picks`** | **`[String]`** |
+| `propose_trade` | **`waiver_budget`** | **`[String]`** |
+| `submit_waiver_claim` | `k_settings` / `v_settings` | `[String]` / `[Int]` |
+| `roster_update_starters` | `starters` | `[String]` |
+| `roster_update_reserve` | `reserve` | `[String]` |
+| `roster_update_taxi` | `taxi` | `[String]` |
+| `update_matchup_leg` | `starters` | `[String]` |
+
+`draft_picks` and `waiver_budget` being *lists* is not a detail: it means each entry is
+its own string, not a JSON document. See section 5.
 
 ## 5. Write operations
 
@@ -150,6 +182,8 @@ Introspection reports these arguments as the scalars `String` and `Int` rather t
 | Edit waiver | `update_waiver_claim` | `leg`, `league_id`, `transaction_id`, kmap metadata/settings |
 | Cancel waiver | `cancel_waiver_claim` | `leg`, `league_id`, `transaction_id` |
 | Propose trade | `propose_trade` | `league_id`, `expires_at`, kmap adds/drops + `draft_picks` + `waiver_budget` |
+| Set IR / reserve | `roster_update_reserve` | `league_id`, `roster_id`, `reserve` |
+| Set taxi squad | `roster_update_taxi` | `league_id`, `roster_id`, `taxi`, `force` |
 | Accept trade | `accept_trade` | `leg`, `league_id`, `transaction_id` |
 | Reject trade | `reject_trade` | `leg`, `league_id`, `transaction_id` |
 | Commissioner lineup | `update_matchup_leg` | `round`, `leg`, `league_id`, `roster_id`, `starters`, `subs` |
@@ -178,6 +212,55 @@ v_settings: keys.length ? Object.values(settings) : undefined
 
 Note the guard: when the settings object is empty both sides are omitted rather than sent
 empty, because Sleeper rejects empty arrays on these arguments.
+
+### draft_picks and waiver_budget are lists of encoded strings
+
+Neither is a JSON document. Each entry is a delimited record of integers:
+
+```
+draft_picks[i]  = originalOwnerRoster,season,round,fromRoster,toRoster
+waiver_budget[i] = fromRoster-toRoster-amount
+```
+
+The five `draft_picks` fields appear in exactly the order the public REST `traded_picks`
+payload uses (`roster_id`, `season`, `round`, `previous_owner_id`, `owner_id`), which is
+the strongest available corroboration that this is the right shape: the two encodings
+describe the same object. `originalOwnerRoster` is the pick's slot owner and `fromRoster`
+is who holds it now, so they diverge once a pick has been traded onward.
+
+Treat this one as the least certain thing in the document. It is consistent with the
+schema type and with the REST shape, but it has not been observed on the wire. Verify
+with `--explain` against a league before relying on a pick trade.
+
+### Other mutations worth knowing about
+
+Not reachable from this CLI yet, but present in the schema:
+
+| Mutation | Purpose |
+| --- | --- |
+| `roster_update_reserve` | IR and reserve slots (exposed as `sleeper lineup ir`) |
+| `roster_update_taxi` | taxi squad (exposed as `sleeper lineup taxi`) |
+| `process_transaction` | commissioner: force a pending waiver or trade to process |
+| `force_cancel_transaction` | commissioner: cancel a pending transaction |
+| `update_matchup_leg_custom_points` | commissioner: override a manager's score |
+| `recalculate_matchup_scoring` | commissioner: rescore a week |
+| `league_update_settings` | commissioner: change league settings |
+| `roster_change_owner` | commissioner: transfer a roster |
+| `update_draft_status` | change draft status |
+
+### Headers
+
+Sleeper's own client sends three headers beyond the obvious ones, and independent
+third-party implementations report the first two as required:
+
+```
+Origin: https://sleeper.com
+Referer: https://sleeper.com/
+X-Sleeper-GraphQL-Op: <operationName>
+```
+
+`X-Sleeper-GraphQL-Op` is not enforced — at least two working clients omit it — but it
+costs nothing to send and matches the real client. There is still no CSRF token.
 
 Trade proposals and draft actions do **not** appear in the public page bundle — they load
 only for authenticated users. Their signatures come from introspection, and their argument

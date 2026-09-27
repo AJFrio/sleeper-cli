@@ -18,16 +18,30 @@
 
 import { UsageError } from '../core/errors.js';
 import type { GraphQLClient } from '../core/graphql.js';
-import { buildDraftPickPayload, type RosterMap, toGraphQLKmapArgs } from '../core/kmap.js';
+import { type RosterMap, toGraphQLKmapArgs } from '../core/kmap.js';
 import type { Transaction } from '../core/types.js';
 
 export interface DraftPickRef {
   /** Round of the pick being traded. */
   round: number;
-  /** Roster id of the pick's current owner, i.e. the counterparty in a two-team deal. */
+  /** Roster id of the pick's **current** holder. In a two-team trade, the counterparty. */
   rosterId: number;
-  /** Season the pick belongs to. Required for future-season picks. */
+  /**
+   * Season the pick belongs to.
+   *
+   * Required unless `defaultSeason` is supplied to the encoder, since the wire format
+   * has no room for an absent season.
+   */
   season?: number;
+  /**
+   * Roster id of the pick's **original** slot owner.
+   *
+   * Defaults to `rosterId`. These differ once a pick has been traded onward, at which
+   * point the original owner is what Sleeper needs to preserve the pick's lineage.
+   */
+  originalOwnerRosterId?: number;
+  /** Roster id receiving the pick. Defaults to `rosterId`, i.e. a pick comes home. */
+  toRosterId?: number;
 }
 
 export interface ProposeTradeInput {
@@ -42,6 +56,8 @@ export interface ProposeTradeInput {
   faab?: { fromRosterId: number; toRosterId: number; amount: number };
   /** Absolute expiry in epoch milliseconds. Sleeper defaults this when omitted. */
   expiresAt?: number;
+  /** Season assumed for any pick that does not name one. */
+  defaultSeason?: number;
   /** Counter a rejected proposal rather than opening a new negotiation. */
   counterTransaction?: { transactionId: string; leg: number };
 }
@@ -62,28 +78,69 @@ export const DEFAULT_TRADE_TTL_MS = 2 * 24 * 60 * 60 * 1000;
 /**
  * Serialise draft picks for the `draft_picks` argument.
  *
- * The argument is declared as a `String`, so it is JSON-encoded. The assumed shape
- * is an array of `[rosterId, round]` pairs, which is the compact form Sleeper's own
- * client uses for pick lists elsewhere. When a pick carries a season it is emitted
- * as an object instead, since a bare pair cannot express which year it belongs to.
+ * The argument is `[String]`, not a JSON string, so each pick is one
+ * comma-separated record of five integers:
+ *
+ *     originalOwnerRoster,season,round,fromRoster,toRoster
+ *
+ * That field order is the same as the public REST `traded_picks` payload
+ * (`roster_id`, `season`, `round`, `previous_owner_id`, `owner_id`), which is the
+ * corroboration for the format: the two shapes describe the same object.
+ *
+ * `originalOwnerRoster` and `fromRoster` are frequently the same team, the difference
+ * being that `original` is the pick's slot owner and `from` is who holds it now.
+ *
+ * A pick whose season is not supplied inherits the league season, because a future
+ * pick is not a thing you trade in a redraft league.
  */
-export function encodeDraftPicks(picks: readonly DraftPickRef[]): string {
-  if (picks.length === 0) return '[]';
-  return JSON.stringify(
-    picks.map((pick) =>
-      pick.season === undefined
-        ? [pick.rosterId, pick.round]
-        : { roster_id: pick.rosterId, round: pick.round, season: pick.season },
-    ),
-  );
+export function encodeDraftPicks(picks: readonly DraftPickRef[], defaultSeason?: number): string[] {
+  return picks.map((pick) => {
+    const season = pick.season ?? defaultSeason;
+    if (season === undefined) {
+      throw new UsageError(
+        `Cannot encode pick ${pick.rosterId}:${pick.round} without a season`,
+        'Pass the season explicitly, e.g. --pick 2:1:2027.',
+      );
+    }
+    const original = pick.originalOwnerRosterId ?? pick.rosterId;
+    const from = pick.rosterId;
+    return `${original},${season},${pick.round},${from},${pick.toRosterId ?? pick.rosterId}`;
+  });
 }
 
-/** Serialise the FAAB leg. Mirrors the `waiver_budget` shape the REST API returns. */
-export function encodeWaiverBudget(faab: ProposeTradeInput['faab']): string | undefined {
+/**
+ * Serialise the FAAB leg for the `waiver_budget` argument, which is `[String]`.
+ *
+ * Each entry is three dash-separated integers: `fromRoster-toRoster-amount`.
+ */
+export function encodeWaiverBudget(faab: ProposeTradeInput['faab']): string[] | undefined {
   if (!faab) return undefined;
-  return JSON.stringify([
-    { sender: faab.fromRosterId, receiver: faab.toRosterId, amount: faab.amount },
-  ]);
+  return [`${faab.fromRosterId}-${faab.toRosterId}-${faab.amount}`];
+}
+
+/** Parse Sleeper's comma-separated draft pick records back into structured picks. */
+export function decodeDraftPicks(raw: readonly string[]): {
+  originalOwnerRosterId: number;
+  season: number;
+  round: number;
+  fromRosterId: number;
+  toRosterId: number;
+}[] {
+  return raw.flatMap((entry) => {
+    const parts = entry.split(',').map((part) => Number(part.trim()));
+    if (parts.length !== 5 || parts.some((n) => !Number.isFinite(n))) return [];
+    const [originalOwnerRosterId, season, round, fromRosterId, toRosterId] = parts;
+    if (
+      originalOwnerRosterId === undefined ||
+      season === undefined ||
+      round === undefined ||
+      fromRosterId === undefined ||
+      toRosterId === undefined
+    ) {
+      return [];
+    }
+    return [{ originalOwnerRosterId, season, round, fromRosterId, toRosterId }];
+  });
 }
 
 function validate(input: ProposeTradeInput): void {
@@ -122,7 +179,9 @@ export function buildProposeTradeOperation(input: ProposeTradeInput): {
 } {
   validate(input);
 
-  const draftPicks = input.picks?.length ? encodeDraftPicks(input.picks) : undefined;
+  const draftPicks = input.picks?.length
+    ? encodeDraftPicks(input.picks, input.defaultSeason)
+    : undefined;
   const waiverBudget = encodeWaiverBudget(input.faab);
 
   return {
@@ -130,7 +189,7 @@ export function buildProposeTradeOperation(input: ProposeTradeInput): {
       mutation propose_trade(
         $leagueId: String!
         $k_adds: [String]  $v_adds: [Int]  $k_drops: [String]  $v_drops: [Int]
-        $draftPicks: String  $waiverBudget: String  $expiresAt: Int
+        $draftPicks: [String]  $waiverBudget: [String]  $expiresAt: Int
         $rejectTransactionId: String  $rejectTransactionLeg: Int
       ) {
         propose_trade(
@@ -146,8 +205,8 @@ export function buildProposeTradeOperation(input: ProposeTradeInput): {
     variables: {
       leagueId: input.leagueId,
       ...toGraphQLKmapArgs({ adds: input.adds, drops: input.drops }),
-      // Empty-string and omitted are both rejected by Sleeper on these arguments,
-      // so send nothing rather than an empty payload.
+      // Omitted rather than sent as an empty array: Sleeper rejects empty arrays on
+      // these arguments.
       ...(draftPicks ? { draftPicks } : {}),
       ...(waiverBudget ? { waiverBudget } : {}),
       ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
@@ -217,39 +276,3 @@ export async function respondToTrade(
   }
   return result;
 }
-
-/** Send a drafted pick string straight through, for cases the builder cannot express. */
-export function rawDraftPicks(json: string): DraftPickRef[] {
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed)) {
-      throw new UsageError('--pick JSON must be an array');
-    }
-    return parsed.flatMap((entry) => {
-      if (Array.isArray(entry) && entry.length >= 2) {
-        const [rosterId, round] = entry;
-        if (typeof rosterId === 'number' && typeof round === 'number') {
-          return [{ rosterId, round }];
-        }
-      }
-      if (typeof entry === 'object' && entry !== null) {
-        const record = entry as Record<string, unknown>;
-        if (typeof record.roster_id === 'number' && typeof record.round === 'number') {
-          return [
-            {
-              rosterId: record.roster_id,
-              round: record.round,
-              ...(typeof record.season === 'number' ? { season: record.season } : {}),
-            },
-          ];
-        }
-      }
-      return [];
-    });
-  } catch (err) {
-    if (err instanceof UsageError) throw err;
-    throw new UsageError(`--pick JSON could not be parsed: ${(err as Error).message}`);
-  }
-}
-
-export { buildDraftPickPayload };
