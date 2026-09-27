@@ -8,7 +8,7 @@ npm run check    # typecheck + lint + test
 npm run dev -- --help
 ```
 
-Node 20.12 or newer.
+Node 22.12 or newer.
 
 ## Working against Sleeper
 

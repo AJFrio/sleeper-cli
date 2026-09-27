@@ -16,10 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         # The floor is a declared engine requirement, so a release must work there.
-        # 20.12 is the floor because the test toolchain (vitest -> rolldown) imports
-        # util.styleText, which landed in 20.12.0. Testing 20.11 would fail in the
-        # runner rather than in any project code.
-        node: ['20.12', '22', '24']
+        # 22.12 is the floor because vitest 5 declares engines
+        # `^22.12.0 || ^24.0.0 || >=26.0.0`; the suite cannot run on Node 20, which
+        # has also been end-of-life since 2026-04-30.
+        node: ['22.12', '24', '25', '26']
 
     steps:
       - uses: actions/checkout@v4

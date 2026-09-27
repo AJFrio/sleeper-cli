@@ -28,11 +28,11 @@ interface Check {
 }
 
 /**
- * Must track `engines.node` in package.json. Node 20.12 is the floor because the test
- * toolchain imports `util.styleText`, added in that release, so nothing below it can
- * run the suite.
+ * Must track `engines.node` in package.json. The floor is 22.12 because the test
+ * toolchain requires it; keeping the two in step is what stops a wrong minimum from
+ * shipping.
  */
-const MIN_NODE_MAJOR = 20;
+const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 12;
 
 function checkNodeVersion(): Check {

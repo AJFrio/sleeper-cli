@@ -28,7 +28,7 @@ The full set of findings, all verified against the live server, is in
 
 ## Install
 
-Requires Node 20.12 or newer.
+Requires Node 22.12 or newer.
 
 ```bash
 npm install -g sleeper-cli
