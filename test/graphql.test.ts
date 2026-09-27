@@ -251,12 +251,13 @@ describe('loginToSleeper', () => {
     const result = await loginToSleeper(c, { identifier: 'me@example.com', password: 'hunter2' });
 
     expect(result.token).toBe('issued-token');
-    expect(result.requiresOtp).toBe(false);
     expect(c.token).toBe('issued-token');
 
     // The password must be in the variables; nothing else should leak it.
     const body = JSON.parse(String(calls[0]?.init.body));
     expect(body.variables.password).toBe('hunter2');
+    expect(body.variables).not.toHaveProperty('otp');
+    expect(body.query).not.toContain('$otp');
   });
 
   it('reports a captcha requirement distinctly', async () => {
@@ -285,6 +286,17 @@ describe('loginToSleeper', () => {
     }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(MfaError);
+  });
+
+  it('does not mistake an otp schema error for an MFA challenge', async () => {
+    const { impl } = fakeFetch({
+      data: { login: null },
+      errors: [{ message: 'Unknown argument "otp" on field "login" of type "RootQueryType".' }],
+    });
+
+    await expect(
+      loginToSleeper(client(impl), { identifier: 'me@example.com', password: 'x' }),
+    ).rejects.toBeInstanceOf(RejectedError);
   });
 
   it('surfaces a plain rejection', async () => {

@@ -150,21 +150,19 @@ export class CaptchaError extends SleeperError {
     super(message, {
       exitCode: EXIT.CAPTCHA,
       code: 'captcha_required',
-      hint:
-        'Sign in at https://sleeper.com in a browser, then copy your session token with ' +
-        '`sleeper auth token --from-browser` and retry.',
+      hint: 'Solve the CAPTCHA in a browser and retry with --captcha <token>, or use an existing Sleeper API session token through SLEEPER_TOKEN. Browser cookies alone are not accepted by the GraphQL API.',
     });
     this.name = 'CaptchaError';
   }
 }
 
-/** Two-factor code was required, missing, or wrong. */
+/** Sleeper explicitly reported a multi-factor verification challenge. */
 export class MfaError extends SleeperError {
   constructor(message: string) {
     super(message, {
       exitCode: EXIT.MFA,
       code: 'mfa_required',
-      hint: 'Supply the code with --otp, or set SLEEPER_OTP for a single invocation.',
+      hint: 'The current password login API does not accept a one-time code. Complete sign-in on sleeper.com and provide an existing API session token through SLEEPER_TOKEN.',
     });
     this.name = 'MfaError';
   }
