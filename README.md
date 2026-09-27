@@ -31,19 +31,17 @@ The full set of findings, all verified against the live server, is in
 Requires Node 22.12 or newer and Git.
 
 ```bash
-npm install -g git+https://github.com/AJFrio/sleeper-cli.git
-```
-
-This installs the latest version from the repository and builds it during installation.
-To run from a local clone instead:
-
-```bash
 git clone https://github.com/AJFrio/sleeper-cli.git
 cd sleeper-cli
 npm install
 npm run build
-node dist/index.js --help
+npm link
+sleeper --help
 ```
+
+`npm link` makes the `sleeper` command available globally from this checkout, so keep
+the cloned directory in place. To update it later, run `git pull`, `npm install`, and
+`npm run build` from the clone.
 
 ## Sign in
 
