@@ -27,8 +27,13 @@ interface Check {
   hint?: string;
 }
 
+/**
+ * Must track `engines.node` in package.json. Node 20.12 is the floor because the test
+ * toolchain imports `util.styleText`, added in that release, so nothing below it can
+ * run the suite.
+ */
 const MIN_NODE_MAJOR = 20;
-const MIN_NODE_MINOR = 11;
+const MIN_NODE_MINOR = 12;
 
 function checkNodeVersion(): Check {
   const [rawMajor, rawMinor] = process.versions.node.split('.');
