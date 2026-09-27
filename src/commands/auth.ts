@@ -20,7 +20,7 @@ import {
   resolvePassword,
   saveCredentials,
 } from '../config/credentials.js';
-import { SessionError, UsageError } from '../core/errors.js';
+import { MfaError, SessionError, UsageError } from '../core/errors.js';
 import { loginToSleeper } from '../core/graphql.js';
 import { avatarUrl } from '../core/types.js';
 import { buildContext } from '../output/context.js';
@@ -114,6 +114,28 @@ function promptText(question: string): Promise<string> {
   });
 }
 
+async function loginWithOtpPrompt(
+  client: Parameters<typeof loginToSleeper>[0],
+  input: Omit<Parameters<typeof loginToSleeper>[1], 'otp'>,
+  otp?: string,
+): Promise<string> {
+  try {
+    return (
+      await loginToSleeper(client, {
+        ...input,
+        ...(otp ? { otp } : {}),
+      })
+    ).token;
+  } catch (error) {
+    if (!(error instanceof MfaError) || otp || !isInteractive()) throw error;
+
+    const challengeOtp = await promptSecret('Two-factor code sent by Sleeper: ');
+    if (!challengeOtp) throw error;
+
+    return (await loginToSleeper(client, { ...input, otp: challengeOtp })).token;
+  }
+}
+
 export function registerAuthCommands(program: Command, deps: CommandDeps): void {
   const auth = program.command('auth').description('Sign in, inspect the session, and sign out');
 
@@ -132,6 +154,8 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
         '',
         'The password can come from --password, the SLEEPER_PASSWORD environment',
         'variable, or an interactive prompt. It is never written to disk.',
+        'Interactive logins prompt for a two-factor code when Sleeper requests one.',
+        'For non-interactive runs, pass --otp or set SLEEPER_OTP.',
         '',
         'Examples:',
         '  sleeper auth login --identifier me@example.com',
@@ -181,12 +205,13 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
         return;
       }
 
-      const { token } = await loginToSleeper(client.graphql, {
+      const loginInput = {
         identifier,
         password,
         ...(options.captcha ? { captcha: options.captcha } : {}),
-        ...(otp ? { otp } : {}),
-      });
+      };
+
+      const token = await loginWithOtpPrompt(client.graphql, loginInput, otp);
 
       client.graphql.setToken(token);
 
