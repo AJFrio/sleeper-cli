@@ -1,0 +1,57 @@
+{
+  "name": "sleeper-cli",
+  "version": "0.1.0",
+  "description": "Agent-first CLI for managing Fantasy Football teams on Sleeper: leagues, rosters, lineups, trades, waivers, drafts and stats.",
+  "keywords": [
+    "sleeper",
+    "fantasy-football",
+    "ffl",
+    "nfl",
+    "cli",
+    "agents",
+    "mcp",
+    "trades",
+    "waivers"
+  ],
+  "license": "MIT",
+  "author": "AJFrio",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "sleeper": "./dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/index.ts",
+    "sleeper": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "prepublishOnly": "npm run check && npm run build"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
