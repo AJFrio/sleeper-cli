@@ -16,11 +16,10 @@ import {
   clearCredentials,
   describeSession,
   resolveIdentifier,
-  resolveOtp,
   resolvePassword,
   saveCredentials,
 } from '../config/credentials.js';
-import { MfaError, SessionError, UsageError } from '../core/errors.js';
+import { SessionError, UsageError } from '../core/errors.js';
 import { loginToSleeper } from '../core/graphql.js';
 import { avatarUrl } from '../core/types.js';
 import { buildContext } from '../output/context.js';
@@ -31,7 +30,6 @@ import type { CommandDeps } from './deps.js';
 interface AuthOptions {
   identifier?: string;
   password?: string;
-  otp?: string;
   captcha?: string;
   save?: boolean;
   offline?: boolean;
@@ -114,28 +112,6 @@ function promptText(question: string): Promise<string> {
   });
 }
 
-async function loginWithOtpPrompt(
-  client: Parameters<typeof loginToSleeper>[0],
-  input: Omit<Parameters<typeof loginToSleeper>[1], 'otp'>,
-  otp?: string,
-): Promise<string> {
-  try {
-    return (
-      await loginToSleeper(client, {
-        ...input,
-        ...(otp ? { otp } : {}),
-      })
-    ).token;
-  } catch (error) {
-    if (!(error instanceof MfaError) || otp || !isInteractive()) throw error;
-
-    const challengeOtp = await promptSecret('Two-factor code sent by Sleeper: ');
-    if (!challengeOtp) throw error;
-
-    return (await loginToSleeper(client, { ...input, otp: challengeOtp })).token;
-  }
-}
-
 export function registerAuthCommands(program: Command, deps: CommandDeps): void {
   const auth = program.command('auth').description('Sign in, inspect the session, and sign out');
 
@@ -145,7 +121,6 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
     .description('Exchange a Sleeper password for a session token')
     .option('--identifier <id>', 'email, phone number, or username')
     .option('--password <pw>', 'password (prefer the env var or the prompt)')
-    .option('--otp <code>', 'two-factor code, when the account requires one')
     .option('--captcha <token>', 'captcha token, if Sleeper challenges the login')
     .option('--no-save', 'do not persist the token to disk')
     .addHelpText(
@@ -154,13 +129,11 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
         '',
         'The password can come from --password, the SLEEPER_PASSWORD environment',
         'variable, or an interactive prompt. It is never written to disk.',
-        'Interactive logins prompt for a two-factor code when Sleeper requests one.',
-        'For non-interactive runs, pass --otp or set SLEEPER_OTP.',
+        'Sleeper’s current password login API does not accept a one-time code.',
         '',
         'Examples:',
         '  sleeper auth login --identifier me@example.com',
         '  SLEEPER_PASSWORD=... sleeper auth login --identifier me@example.com',
-        '  sleeper auth login --identifier me@example.com --otp 123456',
       ].join('\n'),
     )
     .action(async (options: AuthOptions) => {
@@ -189,14 +162,12 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
         );
       }
 
-      const otp = options.otp ?? resolveOtp();
-
       if (context.explain) {
         emit.emitRaw(
           JSON.stringify(
             {
               operation: 'login',
-              variables: { email_or_phone_or_username: identifier, otp: otp ?? null },
+              variables: { email_or_phone_or_username: identifier },
             },
             null,
             2,
@@ -211,7 +182,7 @@ export function registerAuthCommands(program: Command, deps: CommandDeps): void 
         ...(options.captcha ? { captcha: options.captcha } : {}),
       };
 
-      const token = await loginWithOtpPrompt(client.graphql, loginInput, otp);
+      const { token } = await loginToSleeper(client.graphql, loginInput);
 
       client.graphql.setToken(token);
 

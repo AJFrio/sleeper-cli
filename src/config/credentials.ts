@@ -64,13 +64,6 @@ export function resolvePassword(): string | undefined {
   return undefined;
 }
 
-/** Resolve a one-shot OTP, for `sleeper auth login` on a 2FA account. */
-export function resolveOtp(): string | undefined {
-  const fromEnv = process.env.SLEEPER_OTP;
-  if (isNonEmpty(fromEnv)) return fromEnv.trim();
-  return undefined;
-}
-
 /** Read stored credentials, or undefined when absent or unparseable. */
 export function loadCredentials(): StoredCredentials | undefined {
   if (!existsSync(CREDENTIALS_FILE)) return undefined;

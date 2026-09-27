@@ -52,8 +52,10 @@ sleeper auth login --identifier you@example.com
 The password is read from `--password`, from `SLEEPER_PASSWORD`, or from an
 unechoed prompt, in that order. It is never written to disk. The resulting session token
 is stored at `~/.config/sleeper-cli/credentials.json` with mode `0600`.
-If Sleeper requests a two-factor code, an interactive login prompts for it and retries.
-For non-interactive runs, pass it with `--otp` or set `SLEEPER_OTP` for one invocation.
+The current Sleeper password login API does not accept a one-time code. If Sleeper
+returns a verification challenge, the CLI reports it instead of prompting for a code
+that this API cannot submit. Complete sign-in on sleeper.com and use an existing API
+session token through `SLEEPER_TOKEN` if you need to continue without password login.
 
 For CI or one-shot agent runs, skip the file entirely:
 

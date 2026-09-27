@@ -376,20 +376,18 @@ export function extractOperationName(document: string): string {
  * Obtain a session token from Sleeper's credentials.
  *
  * `login` is a query rather than a mutation, accepts an optional captcha token, and
- * returns a bare `{ token }`. Two-factor accounts surface a code in the error's
- * `originalErrors`; the caller retries with `otp`.
+ * returns a bare `{ token }`. The current API does not accept an `otp` argument.
  */
 export async function loginToSleeper(
   client: GraphQLClient,
-  input: { identifier: string; password: string; captcha?: string; otp?: string },
-): Promise<{ token: string; requiresOtp: boolean }> {
+  input: { identifier: string; password: string; captcha?: string },
+): Promise<{ token: string }> {
   const document = `
-    query login($email_or_phone_or_username: String!, $password: String!, $captcha: String, $otp: String) {
+    query login($email_or_phone_or_username: String!, $password: String!, $captcha: String) {
       login(
         email_or_phone_or_username: $email_or_phone_or_username,
         password: $password,
-        captcha: $captcha,
-        otp: $otp
+        captcha: $captcha
       ) { token }
     }
   `;
@@ -400,18 +398,17 @@ export async function loginToSleeper(
     email_or_phone_or_username: input.identifier,
     password: input.password,
     captcha: input.captcha ?? null,
-    otp: input.otp ?? null,
   });
 
   if (data?.login?.token) {
     client.setToken(data.login.token);
-    return { token: data.login.token, requiresOtp: false };
+    return { token: data.login.token };
   }
 
-  // An account with 2FA reports a specific error code rather than a null token.
-  const otpRequested = (errors ?? []).some(
-    (e) => e.code === 'mfa_required' || /otp|two.?factor|2fa|verification code/i.test(e.message),
-  );
+  // Do not infer MFA from any occurrence of "otp": GraphQL itself uses that word
+  // when rejecting the obsolete argument, which used to turn a schema error into a
+  // false challenge and an impossible prompt for a code Sleeper never sent.
+  const otpRequested = (errors ?? []).some(isMfaError);
   if (otpRequested) {
     throw new MfaError('Sleeper requires a two-factor code for this account');
   }
@@ -420,4 +417,15 @@ export async function loginToSleeper(
   }
 
   throw new RejectedError(summarise(errors ?? []) || 'Login failed', { errors });
+}
+
+function isMfaError(error: GraphQLErrorShape): boolean {
+  if (error.code === 'mfa_required') return true;
+
+  const messageSignalsMfa =
+    /\b(?:two[ -]?factor|2fa)\b/i.test(error.message) ||
+    /\bverification code\b.*\b(?:required|needed|invalid|incorrect)\b|\b(?:required|needed|invalid|incorrect)\b.*\bverification code\b/i.test(
+      error.message,
+    );
+  return messageSignalsMfa || (error.originalErrors ?? []).some(isMfaError);
 }

@@ -80,9 +80,12 @@ Verify the session with `{ me { user_id username display_name } }`.
 
 ### Two-factor
 
-The login response signals OTP through GraphQL `originalErrors` rather than a separate
-field. The web client tests for the presence of any original error and switches the form to
-an OTP prompt. The OTP is submitted through the same `login` operation.
+The current live schema's `login` field does **not** accept an `otp` argument. It exposes
+separate `create_verification_code(email_or_phone:)` and
+`verify_verification_code(code:, email_or_phone:)` operations, but these are separate
+phone-code operations, not arguments to password login. The CLI does not attempt to
+resubmit a password login with a one-time code. A GraphQL validation error mentioning
+`otp` is a rejected request, not evidence that Sleeper sent a code.
 
 ### Captcha
 
