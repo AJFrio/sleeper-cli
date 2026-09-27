@@ -32,6 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "dev": "tsx src/index.ts",
     "sleeper": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",

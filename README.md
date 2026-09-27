@@ -28,16 +28,21 @@ The full set of findings, all verified against the live server, is in
 
 ## Install
 
-Requires Node 22.12 or newer.
+Requires Node 22.12 or newer and Git.
 
 ```bash
-npm install -g sleeper-cli
+npm install -g git+https://github.com/AJFrio/sleeper-cli.git
 ```
 
-Or run it without installing:
+This installs the latest version from the repository and builds it during installation.
+To run from a local clone instead:
 
 ```bash
-npx sleeper-cli --help
+git clone https://github.com/AJFrio/sleeper-cli.git
+cd sleeper-cli
+npm install
+npm run build
+node dist/index.js --help
 ```
 
 ## Sign in
